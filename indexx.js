@@ -6,7 +6,7 @@ const path = require('path');
 const dbConfig = {
     host: 'prod-garageworks.ccfcnwudqgxr.ap-south-1.rds.amazonaws.com', // Your DB host
     user: 'gw_admin', // Your DB username
-    password: 'Xopvum-vuwrax-nyxse3', // Your DB password
+    password: '', // Your DB password
     database: 'beta', // Your DB name
 };
 
