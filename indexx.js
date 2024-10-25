@@ -7,7 +7,7 @@ const dbConfig = {
     host: 'prod-garageworks.ccfcnwudqgxr.ap-south-1.rds.amazonaws.com', // Your DB host
     user: 'gw_admin', // Your DB username
     password: 'Xopvum-vuwrax-nyxse3', // Your DB password
-    database: 'flywheel', // Your DB name
+    database: 'beta', // Your DB name
 };
 
 // Directory for saving the backup file
@@ -38,6 +38,11 @@ connection.connect((err) => {
         connection.end();
     });
 });
+
+// Function to check if a value is a valid date
+function isValidDate(value) {
+    return !isNaN(Date.parse(value));
+}
 
 // Function to export the database
 function exportDatabase(connection, databaseName, filePath, callback) {
@@ -74,10 +79,10 @@ function exportDatabase(connection, databaseName, filePath, callback) {
                 const createTableSQL = createTableResult[0]['Create Table'];
                 fileStream.write(`${createTableSQL};\n\n`);
 
-                // Export the table data
-                connection.query(`SELECT * FROM \`${tableName}\``, (err, rows) => {
+                // Get column metadata for date and timestamp formatting
+                connection.query(`SHOW COLUMNS FROM \`${tableName}\``, (err, columns) => {
                     if (err) {
-                        console.error(`Error fetching data for ${tableName}:`, err.message);
+                        console.error(`Error fetching column information for ${tableName}:`, err.message);
                         if (--pendingTables === 0) {
                             fileStream.end();
                             callback();
@@ -85,23 +90,68 @@ function exportDatabase(connection, databaseName, filePath, callback) {
                         return;
                     }
 
-                    if (rows.length > 0) {
-                        const columns = Object.keys(rows[0]).map((col) => `\`${col}\``).join(', ');
-                        const values = rows.map((row) => {
-                            return `(${Object.values(row).map((val) => {
-                                if (val === null) return 'NULL';
-                                return `'${val.toString().replace(/'/g, "''")}'`;
-                            }).join(', ')})`;
-                        }).join(',\n');
+                    const dateColumns = columns.filter(col => col.Type.includes('date')).map(col => col.Field);
+                    const timestampColumns = columns.filter(col => col.Type.includes('timestamp')).map(col => col.Field);
 
-                        const insertSQL = `INSERT INTO \`${tableName}\` (${columns}) VALUES\n${values};\n\n`;
-                        fileStream.write(insertSQL);
-                    }
+                    // Export the table data
+                    connection.query(`SELECT * FROM \`${tableName}\``, (err, rows) => {
+                        if (err) {
+                            console.error(`Error fetching data for ${tableName}:`, err.message);
+                            if (--pendingTables === 0) {
+                                fileStream.end();
+                                callback();
+                            }
+                            return;
+                        }
 
-                    if (--pendingTables === 0) {
-                        fileStream.end();
-                        callback();
-                    }
+                        if (rows.length > 0) {
+                            const columnsList = Object.keys(rows[0]).map((col) => `\`${col}\``).join(', ');
+                            const values = rows.map((row) => {
+                                return `(${Object.keys(row).map((col) => {
+                                    const val = row[col];
+                                    if (val === null) return 'NULL';
+
+                                    if (dateColumns.includes(col) && isValidDate(val)) {
+                                        // Format as 'YYYY-MM-DD' for date columns
+                                        const date = new Date(val);
+                                        const formattedDate = date.toISOString().split('T')[0];
+                                        return `'${formattedDate}'`;
+                                    }
+
+                                    if (timestampColumns.includes(col) && isValidDate(val)) {
+                                        // Format as 'YYYY-MM-DD HH:MM:SS' for timestamp columns
+                                        const date = new Date(val);
+                                        const year = date.getFullYear();
+                                        const month = String(date.getMonth() + 1).padStart(2, '0');
+                                        const day = String(date.getDate()).padStart(2, '0');
+                                        const hours = String(date.getHours()).padStart(2, '0');
+                                        const minutes = String(date.getMinutes()).padStart(2, '0');
+                                        const seconds = String(date.getSeconds()).padStart(2, '0');
+                                        const formattedTimestamp = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+                                        return `'${formattedTimestamp}'`;
+                                    }
+
+                                    if (typeof val === 'string') {
+                                        // Escape special characters in strings
+                                        return `'${val.replace(/'/g, "''")}'`;
+                                    } else {
+                                        // For numbers and other data types
+                                        return val;
+                                    }
+                                }).join(', ')})`;
+                            }).join(',\n');
+
+                            const insertSQL = `INSERT INTO \`${tableName}\` (${columnsList}) VALUES\n${values};\n\n`;
+                            fileStream.write(insertSQL);
+                        } else {
+                            fileStream.write(`-- No data for table ${tableName}\n\n`);
+                        }
+
+                        if (--pendingTables === 0) {
+                            fileStream.end();
+                            callback();
+                        }
+                    });
                 });
             });
         });
